@@ -8,7 +8,6 @@
 namespace yii\elasticsearch;
 
 use Yii;
-use yii\base\InvalidArgumentException;
 use yii\base\InvalidCallException;
 use yii\base\InvalidConfigException;
 use yii\base\InvalidParamException;
@@ -61,7 +60,6 @@ class ActiveRecord extends BaseActiveRecord
     private $_highlight;
     private $_explanation;
 
-
     /**
      * Returns the database connection used by this AR class.
      * By default, the "elasticsearch" application component is used as the database connection.
@@ -87,16 +85,12 @@ class ActiveRecord extends BaseActiveRecord
      */
     public static function findOne($condition)
     {
-        if (!is_array($condition)) {
+        $query = static::find();
+        if (is_array($condition)) {
+            return $query->andWhere($condition)->one();
+        } else {
             return static::get($condition);
         }
-        if (!ArrayHelper::isAssociative($condition)) {
-            $records = static::mget(array_values($condition));
-            return empty($records) ? null : reset($records);
-        }
-
-        $condition = static::filterCondition($condition);
-        return static::find()->andWhere($condition)->one();
     }
 
     /**
@@ -104,31 +98,12 @@ class ActiveRecord extends BaseActiveRecord
      */
     public static function findAll($condition)
     {
-        if (!ArrayHelper::isAssociative($condition)) {
-            return static::mget(is_array($condition) ? array_values($condition) : [$condition]);
+        $query = static::find();
+        if (ArrayHelper::isAssociative($condition)) {
+            return $query->andWhere($condition)->all();
+        } else {
+            return static::mget((array) $condition);
         }
-
-        $condition = static::filterCondition($condition);
-        return static::find()->andWhere($condition)->all();
-    }
-
-    /**
-     * Filter out condition parts that are array valued, to prevent building arbitrary conditions.
-     * @param array $condition
-     */
-    private static function filterCondition($condition)
-    {
-        foreach($condition as $k => $v) {
-            if (is_array($v)) {
-                $condition[$k] = array_values($v);
-                foreach($v as $vv) {
-                    if (is_array($vv)) {
-                        throw new InvalidArgumentException('Nested arrays are not allowed in condition for findAll() and findOne().');
-                    }
-                }
-            }
-        }
-        return $condition;
     }
 
     /**
@@ -359,7 +334,7 @@ class ActiveRecord extends BaseActiveRecord
             // reset fields in case it is scalar value
             $arrayAttributes = $record->arrayAttributes();
             foreach($row['fields'] as $key => $value) {
-                if (!isset($arrayAttributes[$key]) && count($value) === 1) {
+                if (!isset($arrayAttributes[$key]) && count($value) == 1) {
                     $row['fields'][$key] = reset($value);
                 }
             }
@@ -433,7 +408,7 @@ class ActiveRecord extends BaseActiveRecord
      * $customer->insert();
      * ~~~
      *
-     * @param bool $runValidation whether to perform validation before saving the record.
+     * @param boolean $runValidation whether to perform validation before saving the record.
      * If the validation fails, the record will not be inserted into the database.
      * @param array $attributes list of attributes that need to be saved. Defaults to null,
      * meaning all attributes will be saved.
@@ -442,15 +417,14 @@ class ActiveRecord extends BaseActiveRecord
      *
      * - `routing` define shard placement of this record.
      * - `parent` by giving the primaryKey of another record this defines a parent-child relation
-     * - `timestamp` specifies the timestamp to store along with the document. Default is indexing time.
      *
      * Please refer to the [elasticsearch documentation](http://www.elastic.co/guide/en/elasticsearch/reference/current/docs-index_.html)
      * for more details on these options.
      *
-     * By default the `op_type` is set to `create`.
-     * @return bool whether the attributes are valid and the record is inserted successfully.
+     * By default the `op_type` is set to `create` if model primary key is present.
+     * @return boolean whether the attributes are valid and the record is inserted successfully.
      */
-    public function insert($runValidation = true, $attributes = null, $options = ['op_type' => 'create'])
+    public function insert($runValidation = true, $attributes = null, $options = [ ])
     {
         if ($runValidation && !$this->validate($attributes)) {
             return false;
@@ -460,6 +434,11 @@ class ActiveRecord extends BaseActiveRecord
         }
         $values = $this->getDirtyAttributes($attributes);
 
+        if ($this->getPrimaryKey() !== null) {
+            $options['op_type'] = isset($options['op_type']) ? $options['op_type'] : 'create';
+        }
+        Yii::$app->params['es_pro_id'] = $values['m_id'];
+        //unset($values['_id']);
         $response = static::getDb()->createCommand()->insert(
             static::index(),
             static::type(),
@@ -486,7 +465,7 @@ class ActiveRecord extends BaseActiveRecord
     /**
      * @inheritdoc
      *
-     * @param bool $runValidation whether to perform validation before saving the record.
+     * @param boolean $runValidation whether to perform validation before saving the record.
      * If the validation fails, the record will not be inserted into the database.
      * @param array $attributeNames list of attribute names that need to be saved. Defaults to null,
      * meaning all attributes that are loaded from DB will be saved.
@@ -513,7 +492,7 @@ class ActiveRecord extends BaseActiveRecord
      *   Make sure the record has been fetched with a [[version]] before. This is only the case
      *   for records fetched via [[get()]] and [[mget()]] by default. For normal queries, the `_version` field has to be fetched explicitly.
      *
-     * @return int|bool the number of rows affected, or false if validation fails
+     * @return integer|boolean the number of rows affected, or false if validation fails
      * or [[beforeSave()]] stops the updating process.
      * @throws StaleObjectException if optimistic locking is enabled and the data being updated is outdated.
      * @throws InvalidParamException if no [[version]] is available and optimistic locking is enabled.
@@ -532,7 +511,7 @@ class ActiveRecord extends BaseActiveRecord
      * @param array $attributes attributes to update
      * @param array $options options given in this parameter are passed to elasticsearch
      * as request URI parameters. See [[update()]] for details.
-     * @return int|false the number of rows affected, or false if [[beforeSave()]] stops the updating process.
+     * @return integer|false the number of rows affected, or false if [[beforeSave()]] stops the updating process.
      * @throws StaleObjectException if optimistic locking is enabled and the data being updated is outdated.
      * @throws InvalidParamException if no [[version]] is available and optimistic locking is enabled.
      * @throws Exception in case update failed.
@@ -630,7 +609,7 @@ class ActiveRecord extends BaseActiveRecord
      * @param array $condition the conditions that will be passed to the `where()` method when building the query.
      * Please refer to [[ActiveQuery::where()]] on how to specify this parameter.
      * @see [[ActiveRecord::primaryKeysByCondition()]]
-     * @return int the number of rows updated
+     * @return integer the number of rows updated
      * @throws Exception on error.
      */
     public static function updateAll($attributes, $condition = [])
@@ -666,195 +645,4 @@ class ActiveRecord extends BaseActiveRecord
     }
 
     /**
-     * Updates all matching records using the provided counter changes and conditions.
-     * For example, to add 1 to age of all customers whose status is 2,
-     *
-     * ~~~
-     * Customer::updateAllCounters(['age' => 1], ['status' => 2]);
-     * ~~~
-     *
-     * @param array $counters the counters to be updated (attribute name => increment value).
-     * Use negative values if you want to decrement the counters.
-     * @param array $condition the conditions that will be passed to the `where()` method when building the query.
-     * Please refer to [[ActiveQuery::where()]] on how to specify this parameter.
-     * @see [[ActiveRecord::primaryKeysByCondition()]]
-     * @return int the number of rows updated
-     * @throws Exception on error.
-     */
-    public static function updateAllCounters($counters, $condition = [])
-    {
-        $primaryKeys = static::primaryKeysByCondition($condition);
-        if (empty($primaryKeys) || empty($counters)) {
-            return 0;
-        }
-
-        $bulkCommand = static::getDb()->createBulkCommand([
-            "index" => static::index(),
-            "type" => static::type(),
-        ]);
-        foreach ($primaryKeys as $pk) {
-            $script = '';
-            foreach ($counters as $counter => $value) {
-                $script .= "ctx._source.{$counter} += {$counter};\n";
-            }
-            $bulkCommand->addAction(["update" => ["_id" => $pk]], ["script" => $script, "params" => $counters, "lang" => "groovy"]);
-        }
-        $response = $bulkCommand->execute();
-
-        $n = 0;
-        $errors = [];
-        foreach ($response['items'] as $item) {
-            if (isset($item['update']['status']) && $item['update']['status'] == 200) {
-                $n++;
-            } else {
-                $errors[] = $item['update'];
-            }
-        }
-        if (!empty($errors) || isset($response['errors']) && $response['errors']) {
-            throw new Exception(__METHOD__ . ' failed updating records counters.', $errors);
-        }
-
-        return $n;
-    }
-
-    /**
-     * @inheritdoc
-     *
-     * @param array $options options given in this parameter are passed to elasticsearch
-     * as request URI parameters. These are among others:
-     *
-     * - `routing` define shard placement of this record.
-     * - `parent` by giving the primaryKey of another record this defines a parent-child relation
-     * - `timeout` timeout waiting for a shard to become available.
-     * - `replication` the replication type for the delete/index operation (sync or async).
-     * - `consistency` the write consistency of the index/delete operation.
-     * - `refresh` refresh the relevant primary and replica shards (not the whole index) immediately after the operation occurs, so that the updated document appears in search results immediately.
-     *
-     * Please refer to the [elasticsearch documentation](http://www.elastic.co/guide/en/elasticsearch/reference/current/docs-delete.html)
-     * for more details on these options.
-     *
-     * The following parameters are Yii specific:
-     *
-     * - `optimistic_locking` set this to `true` to enable optimistic locking, avoid updating when the record has changed since it
-     *   has been loaded from the database. Yii will set the `version` parameter to the value stored in [[version]].
-     *   See the [elasticsearch documentation](http://www.elastic.co/guide/en/elasticsearch/reference/current/docs-delete.html#delete-versioning) for details.
-     *
-     *   Make sure the record has been fetched with a [[version]] before. This is only the case
-     *   for records fetched via [[get()]] and [[mget()]] by default. For normal queries, the `_version` field has to be fetched explicitly.
-     *
-     * @return int|bool the number of rows deleted, or false if the deletion is unsuccessful for some reason.
-     * Note that it is possible the number of rows deleted is 0, even though the deletion execution is successful.
-     * @throws StaleObjectException if optimistic locking is enabled and the data being deleted is outdated.
-     * @throws Exception in case delete failed.
-     */
-    public function delete($options = [])
-    {
-        if (!$this->beforeDelete()) {
-            return false;
-        }
-        if (isset($options['optimistic_locking']) && $options['optimistic_locking']) {
-            if ($this->_version === null) {
-                throw new InvalidParamException('Unable to use optimistic locking on a record that has no version set. Refer to the docs of ActiveRecord::delete() for details.');
-            }
-            $options['version'] = $this->_version;
-            unset($options['optimistic_locking']);
-        }
-
-        try {
-            $result = static::getDb()->createCommand()->delete(
-                static::index(),
-                static::type(),
-                $this->getOldPrimaryKey(false),
-                $options
-            );
-        } catch(Exception $e) {
-            // HTTP 409 is the response in case of failed optimistic locking
-            // http://www.elastic.co/guide/en/elasticsearch/guide/current/optimistic-concurrency-control.html
-            if (isset($e->errorInfo['responseCode']) && $e->errorInfo['responseCode'] == 409) {
-                throw new StaleObjectException('The object being deleted is outdated.', $e->errorInfo, $e->getCode(), $e);
-            }
-            throw $e;
-        }
-
-        $this->setOldAttributes(null);
-
-        $this->afterDelete();
-
-        if ($result === false) {
-            return 0;
-        } else {
-            return 1;
-        }
-    }
-
-    /**
-     * Deletes rows in the table using the provided conditions.
-     * WARNING: If you do not specify any condition, this method will delete ALL rows in the table.
-     *
-     * For example, to delete all customers whose status is 3:
-     *
-     * ~~~
-     * Customer::deleteAll(['status' => 3]);
-     * ~~~
-     *
-     * @param array $condition the conditions that will be passed to the `where()` method when building the query.
-     * Please refer to [[ActiveQuery::where()]] on how to specify this parameter.
-     * @see [[ActiveRecord::primaryKeysByCondition()]]
-     * @return int the number of rows deleted
-     * @throws Exception on error.
-     */
-    public static function deleteAll($condition = [])
-    {
-        $primaryKeys = static::primaryKeysByCondition($condition);
-        if (empty($primaryKeys)) {
-            return 0;
-        }
-
-        $bulkCommand = static::getDb()->createBulkCommand([
-            "index" => static::index(),
-            "type" => static::type(),
-        ]);
-        foreach ($primaryKeys as $pk) {
-            $bulkCommand->addDeleteAction($pk);
-        }
-        $response = $bulkCommand->execute();
-
-        $n = 0;
-        $errors = [];
-        foreach ($response['items'] as $item) {
-            if (isset($item['delete']['status']) && $item['delete']['status'] == 200) {
-                if (isset($item['delete']['found']) && $item['delete']['found']) {
-                    $n++;
-                }
-            } else {
-                $errors[] = $item['delete'];
-            }
-        }
-        if (!empty($errors) || isset($response['errors']) && $response['errors']) {
-            throw new Exception(__METHOD__ . ' failed deleting records.', $errors);
-        }
-
-        return $n;
-    }
-
-    /**
-     * This method has no effect in Elasticsearch ActiveRecord.
-     *
-     * Elasticsearch ActiveRecord uses [native Optimistic locking](http://www.elastic.co/guide/en/elasticsearch/guide/current/optimistic-concurrency-control.html).
-     * See [[update()]] for more details.
-     */
-    public function optimisticLock()
-    {
-        return null;
-    }
-
-    /**
-     * Destroys the relationship in current model.
-     *
-     * This method is not supported by elasticsearch.
-     */
-    public function unlinkAll($name, $delete = false)
-    {
-        throw new NotSupportedException('unlinkAll() is not supported by elasticsearch, use unlink() instead.');
-    }
-}
+     * Updates all matching records using the provided counter changes
